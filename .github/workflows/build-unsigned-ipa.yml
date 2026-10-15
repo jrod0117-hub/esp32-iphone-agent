@@ -1,0 +1,57 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Generate project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          cat > Config/Local.xcconfig <<'EOF'
+          DEVELOPMENT_TEAM =
+          IA_BUNDLE_ID = com.jrod0.esp32agent
+          IA_ENTITLEMENTS =
+          IA_WIDGET_ENTITLEMENTS =
+          IA_PRESET_BASE_URL =
+          IA_PRESET_MODEL =
+          IA_PRESET_KEY =
+          EOF
+          xcodegen
+      - name: Build unsigned
+        working-directory: ios
+        run: |
+          xcodebuild -project IPhoneAgent.xcodeproj -scheme IPhoneAgent -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= build 2>&1 | tee xcodebuild.log | tail -40
+          app=$(find build/Build/Products -maxdepth 2 -name 'IPhoneAgent.app' | head -1)
+          rm -rf Payload && mkdir Payload
+          ditto --norsrc --noextattr "$app" Payload/IPhoneAgent.app
+          rm -rf Payload/IPhoneAgent.app/_CodeSignature Payload/IPhoneAgent.app/embedded.mobileprovision
+          ditto -c -k --norsrc --noextattr --keepParent Payload ESP32Agent-unsigned.ipa
+          unzip -tq ESP32Agent-unsigned.ipa
+          shasum -a 256 ESP32Agent-unsigned.ipa | tee ESP32Agent-unsigned.ipa.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESP32Agent-unsigned-ipa
+          path: |
+            ios/ESP32Agent-unsigned.ipa
+            ios/ESP32Agent-unsigned.ipa.sha256
+          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: ios/xcodebuild.log
+          retention-days: 7
